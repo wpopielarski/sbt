@@ -59,9 +59,9 @@ object Definition {
     }
 
     private def findCorrectIdentifier(fragment: String, point: Int) = Option {
-      if (isIdentifier(fragment.slice(point, point + 1))) (point, point + 1)
-      else if (isIdentifier(fragment.slice(point - 1, point + 1))) (point - 1, point + 1)
+      if (fragment.length == 1 && isIdentifier(fragment.slice(point, point + 1))) (point, point + 1)
       else if (isIdentifier(fragment.slice(point, point + 2))) (point, point + 2)
+      else if (isIdentifier(fragment.slice(point - 1, point + 1))) (point - 1, point + 1)
       else null
     }
 
@@ -94,8 +94,7 @@ object Definition {
   }
 
   import sbt.internal.langserver.TextDocumentPositionParams
-  private[lsp] def getDefinition(
-      rawDefinition: Option[String]): Option[TextDocumentPositionParams] =
+  private def getDefinition(rawDefinition: Option[String]): Option[TextDocumentPositionParams] =
     rawDefinition.flatMap { rawDefinition =>
       import sbt.internal.langserver.codec.JsonProtocol._
       import sjsonnew.support.scalajson.unsafe.{ Parser => JsonParser, Converter }
@@ -107,7 +106,7 @@ object Definition {
         .toOption
     }
 
-  private[lsp] def getAnalyses(universe: State): Seq[Analysis] = {
+  private def getAnalyses(universe: State): Seq[Analysis] = {
     val root = Project.extract(universe)
     import sbt.librarymanagement.Configurations.Compile
     import sbt.internal.Aggregation
