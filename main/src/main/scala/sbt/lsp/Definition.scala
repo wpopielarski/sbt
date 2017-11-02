@@ -46,30 +46,17 @@ object Definition {
         }
     }
 
-    private def find(fragment: String, left: Int, right: Int, dir: Boolean): Option[String] = {
-      if (left == -1 && !dir) find(fragment, 0, right, true)
-      else if (right > fragment.length && dir)
-        Some(fragment.slice(left, fragment.length).trim)
-      else if (!isIdentifier(fragment.slice(left, right)) && !dir)
-        find(fragment, left + 1, right, true)
-      else if (!isIdentifier(fragment.slice(left, right)) && dir)
-        Some(fragment.slice(left, right - 1).trim)
-      else
-        find(fragment, if (dir) left else left - 1, if (dir) right + 1 else right, dir)
+    def identifier(line: String, point: Int): Option[String] = {
+      val potentials = for {
+        from <- 0 to point
+        to <- point + 1 to line.length
+        fragment = line.slice(from, to).trim if isIdentifier(fragment)
+      } yield fragment
+      potentials.toSeq match {
+        case Nil        => None
+        case potentials => Some(potentials.maxBy(_.length))
+      }
     }
-
-    private def findCorrectIdentifier(fragment: String, point: Int) = Option {
-      if (fragment.length == 1 && isIdentifier(fragment.slice(point, point + 1))) (point, point + 1)
-      else if (isIdentifier(fragment.slice(point, point + 2))) (point, point + 2)
-      else if (isIdentifier(fragment.slice(point - 1, point + 1))) (point - 1, point + 1)
-      else null
-    }
-
-    def identifier(line: String, character: Int): Option[String] =
-      findCorrectIdentifier(line, character)
-        .flatMap {
-          case (left, right) => find(line, left, right, false)
-        }
 
     def asClassObjectIdentifier(sym: String) = Seq(s".$sym", s".$sym$$", s"$$$sym", s"$$$sym$$")
 

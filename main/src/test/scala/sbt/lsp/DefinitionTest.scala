@@ -14,7 +14,7 @@ class DefinitionTest extends org.specs2.mutable.Specification {
     "find valid standard scala identifier when caret is set at the start of it" in {
       textProcessor.identifier("val identifier = 0", 4) must beSome("identifier")
     }
-    "find valid standard scala identifier when caret is set at the end of it" in {
+    "not find valid standard scala identifier because it is '='" in {
       textProcessor.identifier("val identifier = 0", 15) must beNone
     }
     "find valid standard scala identifier when caret is set in the middle of it" in {
@@ -33,13 +33,13 @@ class DefinitionTest extends org.specs2.mutable.Specification {
       textProcessor.identifier("val == = 0", 5) must beSome("==")
     }
     "find valid non-standard short scala identifier when caret is set at the end of it" in {
-      textProcessor.identifier("val == = 0", 6) must beNone
+      textProcessor.identifier("val == = 0", 6) must beSome("==")
     }
-    "trim valid standard scala identifier from scala keyword when caret is set at the start of it" in {
-      textProcessor.identifier("val k = 0", 0) must beSome("va")
+    "choose longest valid standard scala identifier from scala keyword when caret is set at the start of it" in {
+      textProcessor.identifier("val k = 0", 0) must beSome("va") or beSome("al")
     }
-    "trim valid standard scala identifier from scala keyword when caret is set in the middle of it" in {
-      textProcessor.identifier("val k = 0", 1).map(_.trim) must beSome("al")
+    "choose longest valid standard scala identifier from scala keyword when caret is set in the middle of it" in {
+      textProcessor.identifier("val k = 0", 1) must beSome("va") or beSome("al")
     }
     "turn symbol into sequence of potential suffices of jvm class name" in {
       textProcessor.asClassObjectIdentifier("A") must contain(".A", ".A$", "$A", "$A$")
