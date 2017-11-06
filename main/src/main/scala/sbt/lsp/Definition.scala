@@ -33,13 +33,15 @@ object Definition {
   object textProcessor {
     private val isIdentifier = {
       import scala.tools.reflect.{ ToolBox, ToolBoxError }
-      val tb =
+      lazy val tb =
         scala.reflect.runtime.universe
           .runtimeMirror(this.getClass.getClassLoader)
           .mkToolBox()
+      import tb._
+      lazy val check = parse _ andThen compile _
       (identifier: String) =>
         try {
-          tb.parse(s"val $identifier = 0")
+          check(s"val $identifier = 0")
           true
         } catch {
           case _: ToolBoxError => false
@@ -50,7 +52,7 @@ object Definition {
       val potentials = for {
         from <- 0 to point
         to <- point + 1 to line.length
-        fragment = line.slice(from, to).trim if isIdentifier(fragment)
+        fragment = line.slice(from, to).trim if isIdentifier(line.slice(from, to).trim)
       } yield fragment
       potentials.toSeq match {
         case Nil        => None
@@ -126,7 +128,7 @@ object Definition {
   lazy val lspDefinition = Def.inputKey[Unit]("language server protocol definition request task")
   def lspDefinitionTask = Def.inputTask {
     val LspDefinitionLogHead = "lsp-definition"
-    val universe = state.value
+    lazy val universe = state.value
     val rawDefinition = {
       import Def._
       spaceDelimited("<lsp-definition>").parsed
