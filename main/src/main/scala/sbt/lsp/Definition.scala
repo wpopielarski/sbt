@@ -9,6 +9,8 @@ package sbt
 package lsp
 
 import sbt.internal.langserver.ErrorCodes
+import scala.util.matching.Regex.MatchIterator
+import scala.annotation.tailrec
 
 object Definition {
   import java.net.URI
@@ -41,7 +43,7 @@ object Definition {
       lazy val check = parse _ andThen compile _
       (identifier: String) =>
         try {
-          check(s"val $identifier = 0")
+          check(s"val $identifier = 0; val ${identifier}${identifier} = $identifier")
           true
         } catch {
           case _: ToolBoxError => false
@@ -52,7 +54,7 @@ object Definition {
       val potentials = for {
         from <- 0 to point
         to <- point + 1 to line.length
-        fragment = line.slice(from, to).trim if isIdentifier(line.slice(from, to).trim)
+        fragment = line.slice(from, to).trim if isIdentifier(fragment)
       } yield fragment
       potentials.toSeq match {
         case Nil        => None
@@ -60,25 +62,55 @@ object Definition {
       }
     }
 
-    def asClassObjectIdentifier(sym: String) = Seq(s".$sym", s".$sym$$", s"$$$sym", s"$$$sym$$")
+    private def asClassObjectIdentifier(sym: String) =
+      Seq(s".$sym", s".$sym$$", s"$$$sym", s"$$$sym$$")
+    def potentialClsOrTraitOrObj(sym: String): PartialFunction[String, String] = {
+      case potentialClassOrTraitOrObject
+          if asClassObjectIdentifier(sym).exists(potentialClassOrTraitOrObject.endsWith) ||
+            sym == potentialClassOrTraitOrObject ||
+            s"$sym$$" == potentialClassOrTraitOrObject =>
+        potentialClassOrTraitOrObject
+    }
+
+    @tailrec
+    private def fold(z: Seq[(String, Int)])(it: MatchIterator): Seq[(String, Int)] = {
+      if (!it.hasNext) z
+      else fold(z :+ (it.next() -> it.start))(it)
+    }
+
+    private[lsp] def classTraitObjectInLine(sym: String)(line: String): Seq[(String, Int)] = {
+      val potentials =
+        Seq(s"object +$sym".r, s"trait +$sym *\\[?".r, s"class +$sym *\\[?".r)
+      potentials
+        .flatMap { reg =>
+          fold(Seq.empty)(reg.findAllIn(line))
+        }
+        .collect {
+          case (name, pos) =>
+            (if (name.endsWith("[")) name.init.trim else name.trim) -> pos
+        }
+    }
 
     import java.io.File
     def markPosition(file: File, sym: String): Seq[(File, Int, Int, Int)] = {
-      val potentials =
-        Seq(s"object $sym", s"trait $sym ", s"trait $sym[", s"class $sym ", s"class $sym[")
       import java.nio.file._
       import scala.collection.JavaConverters._
+      val findInLine = classTraitObjectInLine(sym)(_)
       Files
         .lines(file.toPath)
         .iterator
         .asScala
         .zipWithIndex
-        .collect {
-          case (line, lineNumber) if potentials.exists(line.contains) =>
-            val from = line.indexOf(sym)
-            (file, lineNumber, from, from + sym.length)
+        .flatMap {
+          case (line, lineNumber) =>
+            findInLine(line)
+              .collect {
+                case (sym, from) =>
+                  (file, lineNumber, from, from + sym.length)
+              }
         }
         .toSeq
+        .distinct
     }
   }
 
@@ -119,12 +151,6 @@ object Definition {
     }
   }.getOrElse(Seq.empty)
 
-  private def potentialClsOrTraitOrObj(potentials: Seq[String]): PartialFunction[String, String] = {
-    case potentialClassOrTraitOrObject
-        if potentials.exists(potentialClassOrTraitOrObject.endsWith) =>
-      potentialClassOrTraitOrObject
-  }
-
   lazy val lspDefinition = Def.inputKey[Unit]("language server protocol definition request task")
   def lspDefinitionTask = Def.inputTask {
     val LspDefinitionLogHead = "lsp-definition"
@@ -159,7 +185,8 @@ object Definition {
               .identifier(line, definition.position.character.toInt)
               .map { sym =>
                 val selectPotentials =
-                  potentialClsOrTraitOrObj(textProcessor.asClassObjectIdentifier(sym))
+                  textProcessor.potentialClsOrTraitOrObj(sym)
+                universe.log.debug(s"symbol $sym")
                 val locations = analyses.flatMap { analysis =>
                   val classes =
                     (analysis.apis.allInternalClasses ++ analysis.apis.allExternals).collect {

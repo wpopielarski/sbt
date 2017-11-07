@@ -20,11 +20,15 @@ class DefinitionTest extends org.specs2.mutable.Specification {
     "find valid standard scala identifier when caret is set in the middle of it" in {
       textProcessor.identifier("val identifier = 0", 11) must beSome("identifier")
     }
+    "find valid standard scala identifier with comma" in {
+      textProcessor.identifier("def foo(a: identifier, b: other) = ???", 13) must beSome(
+        "identifier")
+    }
     "find valid standard short scala identifier when caret is set at the start of it" in {
       textProcessor.identifier("val a = 0", 4) must beSome("a")
     }
     "find valid standard short scala identifier when caret is set at the end of it" in {
-      textProcessor.identifier("val a = 0", 5) must beSome("a")
+      textProcessor.identifier("def foo(f: Int) = Foo(f)", 19) must beSome("Foo")
     }
     "find valid non-standard short scala identifier when caret is set at the start of it" in {
       textProcessor.identifier("val == = 0", 4) must beSome("==")
@@ -41,8 +45,81 @@ class DefinitionTest extends org.specs2.mutable.Specification {
     "choose longest valid standard scala identifier from scala keyword when caret is set in the middle of it" in {
       textProcessor.identifier("val k = 0", 1) must beSome("va") or beSome("al")
     }
-    "turn symbol into sequence of potential suffices of jvm class name" in {
-      textProcessor.asClassObjectIdentifier("A") must contain(".A", ".A$", "$A", "$A$")
+    "match symbol as class name" in {
+      textProcessor.potentialClsOrTraitOrObj("A")("com.acme.A") must be_==("com.acme.A")
+    }
+    "match symbol as object name" in {
+      textProcessor.potentialClsOrTraitOrObj("A")("com.acme.A$") must be_==("com.acme.A$")
+    }
+    "match symbol as inner class name" in {
+      textProcessor.potentialClsOrTraitOrObj("A")("com.acme.A$A") must be_==("com.acme.A$A")
+    }
+    "match symbol as inner object name" in {
+      textProcessor.potentialClsOrTraitOrObj("A")("com.acme.A$A$") must be_==("com.acme.A$A$")
+    }
+    "match symbol as default package class name" in {
+      textProcessor.potentialClsOrTraitOrObj("A")("A") must be_==("A")
+    }
+    "match symbol as default package object name" in {
+      textProcessor.potentialClsOrTraitOrObj("A")("A$") must be_==("A$")
+    }
+    "match object in line version 1" in {
+      textProcessor.classTraitObjectInLine("A")("   object A  ") must contain(("object A", 3))
+    }
+    "match object in line version 2" in {
+      textProcessor.classTraitObjectInLine("A")("   object    A  ") must contain(("object    A", 3))
+    }
+    "match object in line version 3" in {
+      textProcessor.classTraitObjectInLine("A")("object A {") must contain(("object A", 0))
+    }
+    "not match object in line" in {
+      textProcessor.classTraitObjectInLine("B")("object A  ") must be empty
+    }
+    "match class in line version 1" in {
+      textProcessor.classTraitObjectInLine("A")("   class A  ") must contain(("class A", 3))
+    }
+    "match class in line version 2" in {
+      textProcessor.classTraitObjectInLine("A")("   class    A  ") must contain(("class    A", 3))
+    }
+    "match class in line version 3" in {
+      textProcessor.classTraitObjectInLine("A")("class A {") must contain(("class A", 0))
+    }
+    "match class in line version 4" in {
+      textProcessor.classTraitObjectInLine("A")("   class    A[A]  ") must contain(
+        ("class    A", 3))
+    }
+    "match class in line version 5" in {
+      textProcessor.classTraitObjectInLine("A")("   class    A  [A] ") must contain(
+        ("class    A", 3))
+    }
+    "match class in line version 6" in {
+      textProcessor.classTraitObjectInLine("A")("class A[A[_]] {") must contain(("class A", 0))
+    }
+    "not match class in line" in {
+      textProcessor.classTraitObjectInLine("B")("class A  ") must be empty
+    }
+    "match trait in line version 1" in {
+      textProcessor.classTraitObjectInLine("A")("   trait A  ") must contain(("trait A", 3))
+    }
+    "match trait in line version 2" in {
+      textProcessor.classTraitObjectInLine("A")("   trait    A  ") must contain(("trait    A", 3))
+    }
+    "match trait in line version 3" in {
+      textProcessor.classTraitObjectInLine("A")("trait A {") must contain(("trait A", 0))
+    }
+    "match trait in line version 4" in {
+      textProcessor.classTraitObjectInLine("A")("   trait    A[A]  ") must contain(
+        ("trait    A", 3))
+    }
+    "match trait in line version 5" in {
+      textProcessor.classTraitObjectInLine("A")("   trait    A  [A] ") must contain(
+        ("trait    A", 3))
+    }
+    "match trait in line version 6" in {
+      textProcessor.classTraitObjectInLine("A")("trait A[A[_]] {") must contain(("trait A", 0))
+    }
+    "not match trait in line" in {
+      textProcessor.classTraitObjectInLine("B")("trait A  ") must be empty
     }
   }
 }
