@@ -152,7 +152,7 @@ object Definition {
     val cacheFile = compileIncSetup.value.cacheFile.getAbsolutePath
     val useBinary = enableBinaryCompileAnalysis.value
     val s = state.value
-    s.log.err(s"analysis ${(cacheFile -> useBinary)}")
+    s.log.debug(s"analysis location ${(cacheFile -> useBinary)}")
     updateCache(StandardMain.cache)(cacheFile, useBinary)
   }
 
