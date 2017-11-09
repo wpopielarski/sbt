@@ -17,6 +17,7 @@ object Definition {
   import Keys._
   import sbt.internal.inc.Analysis
   import sbt.internal.inc.JavaInterfaceUtil._
+  val AnalysesKey = "lsp.definition.analyses.key"
 
   import sjsonnew.JsonFormat
   def send[A: JsonFormat](universe: State)(params: A): Unit = {
@@ -127,7 +128,35 @@ object Definition {
         .toOption
     }
 
-  private def getAnalyses(universe: State): Seq[Analysis] = {
+  import scalacache.Cache
+  import scala.concurrent.Future
+  private[sbt] def updateCache(cache: Cache[Any])(cacheFile: String,
+                                                  useBinary: Boolean): Future[Any] = {
+    import scalacache.modes.scalaFuture._
+    import scala.concurrent.ExecutionContext.Implicits.global
+    import scala.concurrent.duration.Duration.Inf
+    cache.get(AnalysesKey).flatMap {
+      case None =>
+        cache.put(AnalysesKey)(Set(cacheFile -> useBinary), Option(Inf))
+      case Some(set) =>
+        cache.put(AnalysesKey)(set.asInstanceOf[Set[(String, Boolean)]].filterNot {
+          case (file, bin) => file == cacheFile
+        } + (cacheFile -> useBinary), Option(Inf))
+      case _ => Future.successful(())
+    }
+  }
+
+  lazy val lspCollectAnalyses =
+    Def.taskKey[Unit]("language server protocol task to collect analyses locations")
+  def lspCollectAnalysesTask = Def.task {
+    val cacheFile = compileIncSetup.value.cacheFile.getAbsolutePath
+    val useBinary = enableBinaryCompileAnalysis.value
+    val s = state.value
+    s.log.err(s"analysis ${(cacheFile -> useBinary)}")
+    updateCache(StandardMain.cache)(cacheFile, useBinary)
+  }
+
+  private[sbt] def getAnalyses(universe: State): Seq[Analysis] = {
     val root = Project.extract(universe)
     import sbt.librarymanagement.Configurations.Compile
     import sbt.internal.Aggregation

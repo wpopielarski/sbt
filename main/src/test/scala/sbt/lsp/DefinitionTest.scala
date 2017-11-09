@@ -122,4 +122,60 @@ class DefinitionTest extends org.specs2.mutable.Specification {
       textProcessor.classTraitObjectInLine("B")("trait A  ") must be empty
     }
   }
+  "definition" should {
+    "cache data in cache" in {
+      import scalacache.caffeine._
+      val cache = CaffeineCache[Any]
+      val cacheFile = "Test.scala"
+      val useBinary = true
+
+      import scalacache.modes.scalaFuture._
+      val actual = Definition
+        .updateCache(cache)(cacheFile, useBinary)
+        .flatMap(_ => cache.get(Definition.AnalysesKey))
+
+      actual.collect {
+        case Some(s) => s.asInstanceOf[Set[(String, Boolean)]]
+      } should contain("Test.scala" -> true).await
+    }
+    "replace cache data in cache" in {
+      import scalacache.caffeine._
+      val cache = CaffeineCache[Any]
+      val cacheFile = "Test.scala"
+      val useBinary = true
+      val falseUseBinary = false
+
+      import scalacache.modes.scalaFuture._
+      val actual = Definition
+        .updateCache(cache)(cacheFile, falseUseBinary)
+        .flatMap { _ =>
+          Definition.updateCache(cache)(cacheFile, useBinary)
+        }
+        .flatMap(_ => cache.get(Definition.AnalysesKey))
+
+      actual.collect {
+        case Some(s) => s.asInstanceOf[Set[(String, Boolean)]]
+      } should contain("Test.scala" -> true).await
+    }
+    "cache more data in cache" in {
+      import scalacache.caffeine._
+      val cache = CaffeineCache[Any]
+      val cacheFile = "Test.scala"
+      val useBinary = true
+      val otherCacheFile = "OtherTest.scala"
+      val otherUseBinary = false
+
+      import scalacache.modes.scalaFuture._
+      val actual = Definition
+        .updateCache(cache)(otherCacheFile, otherUseBinary)
+        .flatMap { _ =>
+          Definition.updateCache(cache)(cacheFile, useBinary)
+        }
+        .flatMap(_ => cache.get(Definition.AnalysesKey))
+
+      actual.collect {
+        case Some(s) => s.asInstanceOf[Set[(String, Boolean)]]
+      } should contain("Test.scala" -> true, "OtherTest.scala" -> false).await
+    }
+  }
 }
