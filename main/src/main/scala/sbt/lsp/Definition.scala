@@ -8,9 +8,14 @@
 package sbt
 package lsp
 
+import sbt.internal.inc.MixedAnalyzingCompiler
 import sbt.internal.langserver.ErrorCodes
-import scala.util.matching.Regex.MatchIterator
+import sbt.util.Logger
 import scala.annotation.tailrec
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
+import scala.util.matching.Regex.MatchIterator
+import java.nio.file.Paths
 
 object Definition {
   import java.net.URI
@@ -20,16 +25,13 @@ object Definition {
   val AnalysesKey = "lsp.definition.analyses.key"
 
   import sjsonnew.JsonFormat
-  def send[A: JsonFormat](universe: State)(params: A): Unit = {
+  def send[A: JsonFormat](source: CommandSource, execId: String)(params: A): Unit = {
     for {
-      command <- universe.currentCommand
-      source <- command.source
-      origChannelName = source.channelName
       channel <- StandardMain.exchange.channels.collectFirst {
-        case c if c.name == origChannelName => c
+        case c if c.name == source.channelName => c
       }
     } yield {
-      channel.publishEvent(params, command.execId)
+      channel.publishEvent(params, Option(execId))
     }
   }
 
@@ -116,33 +118,27 @@ object Definition {
   }
 
   import sbt.internal.langserver.TextDocumentPositionParams
-  private def getDefinition(rawDefinition: Option[String]): Option[TextDocumentPositionParams] =
-    rawDefinition.flatMap { rawDefinition =>
-      import sbt.internal.langserver.codec.JsonProtocol._
-      import sjsonnew.support.scalajson.unsafe.{ Parser => JsonParser, Converter }
-      JsonParser
-        .parseFromString(rawDefinition)
-        .flatMap { jsonDefinition =>
-          Converter.fromJson[TextDocumentPositionParams](jsonDefinition)
-        }
-        .toOption
-    }
+  import sjsonnew.shaded.scalajson.ast.unsafe.JValue
+  private def getDefinition(jsonDefinition: JValue): Option[TextDocumentPositionParams] = {
+    import sbt.internal.langserver.codec.JsonProtocol._
+    import sjsonnew.support.scalajson.unsafe.Converter
+    Converter.fromJson[TextDocumentPositionParams](jsonDefinition).toOption
+  }
 
-  import scalacache.Cache
-  import scala.concurrent.Future
-  private[sbt] def updateCache(cache: Cache[Any])(cacheFile: String,
-                                                  useBinary: Boolean): Future[Any] = {
-    import scalacache.modes.scalaFuture._
-    import scala.concurrent.ExecutionContext.Implicits.global
+  import scalacache._
+  private[sbt] def updateCache[F[_]](cache: Cache[Any])(cacheFile: String, useBinary: Boolean)(
+      implicit
+      mode: Mode[F],
+      flags: Flags): F[Any] = {
     import scala.concurrent.duration.Duration.Inf
-    cache.get(AnalysesKey).flatMap {
+    mode.M.flatMap(cache.get(AnalysesKey)) {
       case None =>
         cache.put(AnalysesKey)(Set(cacheFile -> useBinary), Option(Inf))
       case Some(set) =>
         cache.put(AnalysesKey)(set.asInstanceOf[Set[(String, Boolean)]].filterNot {
           case (file, bin) => file == cacheFile
         } + (cacheFile -> useBinary), Option(Inf))
-      case _ => Future.successful(())
+      case _ => mode.M.pure(())
     }
   }
 
@@ -153,103 +149,113 @@ object Definition {
     val useBinary = enableBinaryCompileAnalysis.value
     val s = state.value
     s.log.debug(s"analysis location ${(cacheFile -> useBinary)}")
+    import scalacache.modes.sync._
     updateCache(StandardMain.cache)(cacheFile, useBinary)
   }
 
-  private[sbt] def getAnalyses(universe: State): Seq[Analysis] = {
-    val root = Project.extract(universe)
-    import sbt.librarymanagement.Configurations.Compile
-    import sbt.internal.Aggregation
-    val skey = (Keys.previousCompile in Compile).scopedKey
-    val tasks = root.structure.data.scopes
-      .map { scope =>
-        root.structure.data.get(scope, skey.key)
-      }
+  private[sbt] def getAnalyses(log: Logger): Future[Seq[Analysis]] = {
+    import scalacache.modes.scalaFuture._
+    import scala.concurrent.ExecutionContext.Implicits.global
+    import java.nio.file.{ Files, Paths }
+    StandardMain.cache
+      .get(AnalysesKey)
       .collect {
-        case Some(task) => Aggregation.KeyValue(skey, task)
+        case Some(a) => a.asInstanceOf[Set[(String, Boolean)]]
       }
-      .toSeq
-    import sbt.std.Transform.DummyTaskMap
-    val complete =
-      Aggregation.timedRun(universe.copy(remainingCommands = Nil), tasks, DummyTaskMap(Nil))
-    complete.results.toEither.toOption.map { results =>
-      results.map(_.value.analysis.toOption).collect {
-        case Some(analysis: Analysis) =>
-          analysis
-      }
-    }
-  }.getOrElse(Seq.empty)
-
-  lazy val lspDefinition = Def.inputKey[Unit]("language server protocol definition request task")
-  def lspDefinitionTask = Def.inputTask {
-    val LspDefinitionLogHead = "lsp-definition"
-    lazy val universe = state.value
-    val rawDefinition = {
-      import Def._
-      spaceDelimited("<lsp-definition>").parsed
-    }
-    universe.log.debug(s"$LspDefinitionLogHead raw request: $rawDefinition")
-    val definition = getDefinition(rawDefinition.headOption)
-    lazy val analyses = getAnalyses(universe)
-
-    definition
-      .map { definition =>
-        val srcs = sources.value
-        srcs
-          .collectFirst {
-            case file if definition.textDocument.uri.endsWith(file.getAbsolutePath) =>
-              new URI(definition.textDocument.uri)
-          }
-          .flatMap { uri =>
-            import java.nio.file._
-            Files
-              .lines(Paths.get(uri))
-              .skip(definition.position.line)
-              .findFirst
-              .toOption
-          }
-          .flatMap { line =>
-            universe.log.debug(s"$LspDefinitionLogHead found line: $line")
-            textProcessor
-              .identifier(line, definition.position.character.toInt)
-              .map { sym =>
-                val selectPotentials =
-                  textProcessor.potentialClsOrTraitOrObj(sym)
-                universe.log.debug(s"symbol $sym")
-                val locations = analyses.flatMap { analysis =>
-                  val classes =
-                    (analysis.apis.allInternalClasses ++ analysis.apis.allExternals).collect {
-                      selectPotentials
-                    }
-                  universe.log.debug(s"$LspDefinitionLogHead potentials: $classes")
-                  classes
-                    .flatMap { className =>
-                      universe.log.debug(
-                        s"$LspDefinitionLogHead classes ${analysis.relations.classes}")
-                      analysis.relations.definesClass(className) ++ analysis.relations
-                        .libraryDefinesClass(className)
-                    }
-                    .flatMap { classFile =>
-                      textProcessor.markPosition(classFile, sym).collect {
-                        case (file, line, from, to) =>
-                          import sbt.internal.langserver.{ Location, Position, Range }
-                          Location(file.toURI.toURL.toString,
-                                   Range(Position(line, from), Position(line, to)))
-                      }
-                    }
-                }
-                import sbt.internal.langserver.codec.JsonProtocol._
-                send(universe)(locations.toArray)
+      .map { locations =>
+        val existingLocations = locations.collect {
+          case (cacheFile, useBinary) if Files.exists(Paths.get(cacheFile)) =>
+            cacheFile -> useBinary
+        }
+        import scala.concurrent.duration.Duration.Inf
+        StandardMain.cache.put(AnalysesKey)(existingLocations, Option(Inf))
+        existingLocations
+          .collect {
+            case (cacheFile, useBinary) =>
+              val store =
+                MixedAnalyzingCompiler.staticCachedStore(Paths.get(cacheFile).toFile, !useBinary)
+              store.get().toOption.collect {
+                case contents =>
+                  contents.getAnalysis
               }
           }
+          .collect {
+            case Some(a: Analysis) => a
+          }
+          .toSeq
       }
-      .orElse {
+  }
+
+  def lspDefinition(jsonDefinition: JValue,
+                    requestId: String,
+                    commandSource: CommandSource,
+                    log: Logger)(implicit ec: ExecutionContext): Future[Unit] = Future {
+    val LspDefinitionLogHead = "lsp-definition"
+    import sjsonnew.support.scalajson.unsafe.CompactPrinter
+    log.debug(s"$LspDefinitionLogHead json request: ${CompactPrinter(jsonDefinition)}")
+    lazy val analyses = getAnalyses(log)
+    val definition = getDefinition(jsonDefinition)
+    definition
+      .flatMap { definition =>
+        val uri = URI.create(definition.textDocument.uri)
+        import java.nio.file._
+        Files
+          .lines(Paths.get(uri))
+          .skip(definition.position.line)
+          .findFirst
+          .toOption
+          .flatMap { line =>
+            log.debug(s"$LspDefinitionLogHead found line: $line")
+            textProcessor
+              .identifier(line, definition.position.character.toInt)
+          }
+      }
+      .map { sym =>
+        log.debug(s"symbol $sym")
+        analyses
+          .map { analyses =>
+            val locations = analyses.flatMap { analysis =>
+              val selectPotentials = textProcessor.potentialClsOrTraitOrObj(sym)
+              val classes =
+                (analysis.apis.allInternalClasses ++ analysis.apis.allExternals).collect {
+                  selectPotentials
+                }
+              log.debug(s"$LspDefinitionLogHead potentials: $classes")
+              classes
+                .flatMap { className =>
+                  analysis.relations.definesClass(className) ++ analysis.relations
+                    .libraryDefinesClass(className)
+                }
+                .flatMap { classFile =>
+                  textProcessor.markPosition(classFile, sym).collect {
+                    case (file, line, from, to) =>
+                      import sbt.internal.langserver.{ Location, Position, Range }
+                      Location(file.toURI.toURL.toString,
+                               Range(Position(line, from), Position(line, to)))
+                  }
+                }
+            }
+            log.debug(s"$LspDefinitionLogHead locations ${locations}")
+            import sbt.internal.langserver.codec.JsonProtocol._
+            send(commandSource, requestId)(locations.toArray)
+          }
+          .recover {
+            case anyException @ _ =>
+              log.warn(s"Problem with processing analyses ${CompactPrinter(jsonDefinition)}")
+              import sbt.internal.protocol.JsonRpcResponseError
+              import sbt.internal.protocol.codec.JsonRPCProtocol._
+              send(commandSource, requestId)(
+                JsonRpcResponseError(ErrorCodes.InternalError,
+                                     "Problem with processing analyses.",
+                                     None))
+          }
+      }
+      .getOrElse { _: Future[Unit] =>
+        log.warn(s"Incorrect definition request ${CompactPrinter(jsonDefinition)}")
         import sbt.internal.protocol.JsonRpcResponseError
         import sbt.internal.protocol.codec.JsonRPCProtocol._
-        universe.log.warn(s"Incorrect definition request ${rawDefinition.headOption}")
-        send(universe)(
+        send(commandSource, requestId)(
           JsonRpcResponseError(ErrorCodes.ParseError, "Incorrect definition request", None))
-        None
       }
   }
 }
