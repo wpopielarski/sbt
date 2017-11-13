@@ -53,10 +53,21 @@ object Definition {
     }
 
     def identifier(line: String, point: Int): Option[String] = {
+      val whiteSpaceReg = "\\s+".r
+      val (zero, end) = fold(Seq.empty)(whiteSpaceReg.findAllIn(line))
+        .collect {
+          case (white, ind) => (ind, ind + white.length)
+        }
+        .fold((0, line.length)) { (z, e) =>
+          val (from, to) = e
+          val (left, right) = z
+          (if (to > left && to <= point) to else left,
+           if (from < right && from >= point) from else right)
+        }
       val potentials = for {
-        from <- 0 to point
-        to <- point + 1 to line.length
-        fragment = line.slice(from, to).trim if isIdentifier(fragment)
+        from <- zero to point
+        to <- point to end
+        fragment = line.slice(from, to).trim if fragment.nonEmpty && isIdentifier(fragment)
       } yield fragment
       potentials.toSeq match {
         case Nil        => None
@@ -167,8 +178,9 @@ object Definition {
             cacheFile -> useBinary
         }
         import scala.concurrent.duration.Duration.Inf
-        StandardMain.cache.put(AnalysesKey)(existingLocations, Option(Inf))
-        existingLocations
+        if (existingLocations.size < locations.size)
+          StandardMain.cache.put(AnalysesKey)(existingLocations, Option(Inf))
+        existingLocations.toSeq.par
           .collect {
             case (cacheFile, useBinary) =>
               val store =
@@ -181,7 +193,7 @@ object Definition {
           .collect {
             case Some(a: Analysis) => a
           }
-          .toSeq
+          .seq
       }
   }
 
@@ -249,12 +261,12 @@ object Definition {
                                      None))
           }
       }
-      .getOrElse { _: Future[Unit] =>
-        log.warn(s"Incorrect definition request ${CompactPrinter(jsonDefinition)}")
-        import sbt.internal.protocol.JsonRpcResponseError
-        import sbt.internal.protocol.codec.JsonRPCProtocol._
-        send(commandSource, requestId)(
-          JsonRpcResponseError(ErrorCodes.ParseError, "Incorrect definition request", None))
+      .orElse {
+        log.info(s"Symbol not found in definition request ${CompactPrinter(jsonDefinition)}")
+        import sbt.internal.langserver.Location
+        import sbt.internal.langserver.codec.JsonProtocol._
+        send(commandSource, requestId)(Array.empty[Location])
+        None
       }
   }
 }
