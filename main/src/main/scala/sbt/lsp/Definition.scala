@@ -12,8 +12,7 @@ import sbt.internal.inc.MixedAnalyzingCompiler
 import sbt.internal.langserver.ErrorCodes
 import sbt.util.Logger
 import scala.annotation.tailrec
-import scala.concurrent.ExecutionContext
-import scala.concurrent.Future
+import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.matching.Regex.MatchIterator
 import java.nio.file.Paths
 

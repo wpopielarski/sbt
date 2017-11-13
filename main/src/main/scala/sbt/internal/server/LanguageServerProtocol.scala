@@ -70,7 +70,7 @@ private[sbt] trait LanguageServerProtocol extends CommandChannel {
         val param = Converter.fromJson[Q](json).get
         onSettingQuery(Option(request.id), param)
       }
-      case garbage => log.err(s"Dig in this pile: $garbage")
+      case unhandledRequest => log.info(s"Unhandled request received: $unhandledRequest")
     }
   }
 
