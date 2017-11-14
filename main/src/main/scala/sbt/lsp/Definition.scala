@@ -13,9 +13,10 @@ import sbt.internal.langserver.ErrorCodes
 import sbt.util.Logger
 import scala.annotation.tailrec
 import scala.concurrent.{ ExecutionContext, Future }
+import scala.concurrent.duration.Duration.Inf
 import scala.util.matching.Regex.MatchIterator
-import java.nio.file.Paths
-import xsbti.compile.AnalysisStore
+import java.nio.file.{ Files, Paths }
+import sbt.StandardMain
 
 object Definition {
   import java.net.URI
@@ -69,18 +70,26 @@ object Definition {
         from <- zero to point
         to <- point to end
       } yield (from -> to)
-      val potentials = ranges.par
-        .collect {
-          case (from, to) => line.slice(from, to).trim
+      ranges
+        .sortBy {
+          case (from, to) => -(to - from)
         }
-        .collect {
-          case fragment if fragment.nonEmpty && isIdentifier(fragment) => fragment
+        .foldLeft(Seq.empty[String]) { (z, e) =>
+          val (from, to) = e
+          val fragment = line.slice(from, to).trim
+          if ((z.isEmpty && fragment.nonEmpty || z.nonEmpty && z.head.length <= fragment.length) && isIdentifier(
+                fragment)) {
+            z match {
+              case Nil => fragment +: z
+              case h +: _ if h.length < fragment.length =>
+                Seq(fragment)
+              case h +: _ if h.length == fragment.length =>
+                fragment +: z
+              case z => z
+            }
+          } else z
         }
-        .seq
-      potentials match {
-        case Nil        => None
-        case potentials => Some(potentials.maxBy(_.length))
-      }
+        .headOption
     }
 
     private def asClassObjectIdentifier(sym: String) =
@@ -143,25 +152,33 @@ object Definition {
     Converter.fromJson[TextDocumentPositionParams](jsonDefinition).toOption
   }
 
+  import java.io.File
+  private def storeAnalysis(cacheFile: File, useBinary: Boolean): Option[Analysis] =
+    MixedAnalyzingCompiler
+      .staticCachedStore(cacheFile, !useBinary)
+      .get
+      .toOption
+      .collect {
+        case contents =>
+          contents.getAnalysis
+      }
+      .collect {
+        case a: Analysis => a
+      }
+
   import scalacache._
   private[sbt] def updateCache[F[_]](cache: Cache[Any])(cacheFile: String, useBinary: Boolean)(
       implicit
       mode: Mode[F],
       flags: Flags): F[Any] = {
-    import scala.concurrent.duration.Duration.Inf
     mode.M.flatMap(cache.get(AnalysesKey)) {
       case None =>
-        cache.put(AnalysesKey)(
-          Set(
-            cacheFile -> MixedAnalyzingCompiler.staticCachedStore(Paths.get(cacheFile).toFile,
-                                                                  !useBinary)),
-          Option(Inf))
+        cache.put(AnalysesKey)(Set(cacheFile -> useBinary -> None), Option(Inf))
       case Some(set) =>
         cache.put(AnalysesKey)(
-          set.asInstanceOf[Set[(String, AnalysisStore)]].filterNot {
-            case (file, _) => file == cacheFile
-          } + (cacheFile -> MixedAnalyzingCompiler.staticCachedStore(Paths.get(cacheFile).toFile,
-                                                                     !useBinary)),
+          set.asInstanceOf[Set[((String, Boolean), Option[Analysis])]].filterNot {
+            case ((file, _), _) => file == cacheFile
+          } + (cacheFile -> useBinary -> None),
           Option(Inf)
         )
       case _ => mode.M.pure(())
@@ -182,32 +199,26 @@ object Definition {
   private[sbt] def getAnalyses(log: Logger): Future[Seq[Analysis]] = {
     import scalacache.modes.scalaFuture._
     import scala.concurrent.ExecutionContext.Implicits.global
-    import java.nio.file.{ Files, Paths }
     StandardMain.cache
       .get(AnalysesKey)
       .collect {
-        case Some(a) => a.asInstanceOf[Set[(String, AnalysisStore)]]
+        case Some(a) => a.asInstanceOf[Set[((String, Boolean), Option[Analysis])]]
       }
       .map { caches =>
-        val existingCaches = caches.collect {
-          case cache @ (cacheFile, _) if Files.exists(Paths.get(cacheFile)) =>
-            cache
+        val (working, uninitialized) = caches.partition { cacheAnalysis =>
+          cacheAnalysis._2 != None
         }
-        import scala.concurrent.duration.Duration.Inf
-        if (existingCaches.size < caches.size)
-          StandardMain.cache.put(AnalysesKey)(existingCaches, Option(Inf))
-        existingCaches.toSeq.par
-          .collect {
-            case (_, store) =>
-              store.get().toOption.collect {
-                case contents =>
-                  contents.getAnalysis
-              }
-          }
-          .collect {
-            case Some(a: Analysis) => a
-          }
-          .seq
+        val addToCache = uninitialized.collect {
+          case (title @ (file, useBinary), _) if Files.exists(Paths.get(file)) =>
+            (title, storeAnalysis(Paths.get(file).toFile, !useBinary))
+        }
+        val validCaches = working ++ addToCache
+        if (addToCache.nonEmpty)
+          StandardMain.cache.put(AnalysesKey)(validCaches, Option(Inf))
+        validCaches.toSeq.collect {
+          case (_, Some(analysis)) =>
+            analysis
+        }
       }
   }
 
