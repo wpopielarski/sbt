@@ -15,6 +15,7 @@ import scala.annotation.tailrec
 import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.matching.Regex.MatchIterator
 import java.nio.file.Paths
+import xsbti.compile.AnalysisStore
 
 object Definition {
   import java.net.URI
@@ -64,12 +65,19 @@ object Definition {
           (if (to > left && to <= point) to else left,
            if (from < right && from >= point) from else right)
         }
-      val potentials = for {
+      val ranges = for {
         from <- zero to point
         to <- point to end
-        fragment = line.slice(from, to).trim if fragment.nonEmpty && isIdentifier(fragment)
-      } yield fragment
-      potentials.toSeq match {
+      } yield (from -> to)
+      val potentials = ranges.par
+        .collect {
+          case (from, to) => line.slice(from, to).trim
+        }
+        .collect {
+          case fragment if fragment.nonEmpty && isIdentifier(fragment) => fragment
+        }
+        .seq
+      potentials match {
         case Nil        => None
         case potentials => Some(potentials.maxBy(_.length))
       }
@@ -143,11 +151,19 @@ object Definition {
     import scala.concurrent.duration.Duration.Inf
     mode.M.flatMap(cache.get(AnalysesKey)) {
       case None =>
-        cache.put(AnalysesKey)(Set(cacheFile -> useBinary), Option(Inf))
+        cache.put(AnalysesKey)(
+          Set(
+            cacheFile -> MixedAnalyzingCompiler.staticCachedStore(Paths.get(cacheFile).toFile,
+                                                                  !useBinary)),
+          Option(Inf))
       case Some(set) =>
-        cache.put(AnalysesKey)(set.asInstanceOf[Set[(String, Boolean)]].filterNot {
-          case (file, bin) => file == cacheFile
-        } + (cacheFile -> useBinary), Option(Inf))
+        cache.put(AnalysesKey)(
+          set.asInstanceOf[Set[(String, AnalysisStore)]].filterNot {
+            case (file, _) => file == cacheFile
+          } + (cacheFile -> MixedAnalyzingCompiler.staticCachedStore(Paths.get(cacheFile).toFile,
+                                                                     !useBinary)),
+          Option(Inf)
+        )
       case _ => mode.M.pure(())
     }
   }
@@ -170,21 +186,19 @@ object Definition {
     StandardMain.cache
       .get(AnalysesKey)
       .collect {
-        case Some(a) => a.asInstanceOf[Set[(String, Boolean)]]
+        case Some(a) => a.asInstanceOf[Set[(String, AnalysisStore)]]
       }
-      .map { locations =>
-        val existingLocations = locations.collect {
-          case (cacheFile, useBinary) if Files.exists(Paths.get(cacheFile)) =>
-            cacheFile -> useBinary
+      .map { caches =>
+        val existingCaches = caches.collect {
+          case cache @ (cacheFile, _) if Files.exists(Paths.get(cacheFile)) =>
+            cache
         }
         import scala.concurrent.duration.Duration.Inf
-        if (existingLocations.size < locations.size)
-          StandardMain.cache.put(AnalysesKey)(existingLocations, Option(Inf))
-        existingLocations.toSeq.par
+        if (existingCaches.size < caches.size)
+          StandardMain.cache.put(AnalysesKey)(existingCaches, Option(Inf))
+        existingCaches.toSeq.par
           .collect {
-            case (cacheFile, useBinary) =>
-              val store =
-                MixedAnalyzingCompiler.staticCachedStore(Paths.get(cacheFile).toFile, !useBinary)
+            case (_, store) =>
               store.get().toOption.collect {
                 case contents =>
                   contents.getAnalysis
@@ -225,7 +239,7 @@ object Definition {
         log.debug(s"symbol $sym")
         analyses
           .map { analyses =>
-            val locations = analyses.flatMap { analysis =>
+            val locations = analyses.par.flatMap { analysis =>
               val selectPotentials = textProcessor.potentialClsOrTraitOrObj(sym)
               val classes =
                 (analysis.apis.allInternalClasses ++ analysis.apis.allExternals).collect {
@@ -245,7 +259,7 @@ object Definition {
                                Range(Position(line, from), Position(line, to)))
                   }
                 }
-            }
+            }.seq
             log.debug(s"$LspDefinitionLogHead locations ${locations}")
             import sbt.internal.langserver.codec.JsonProtocol._
             send(commandSource, requestId)(locations.toArray)
