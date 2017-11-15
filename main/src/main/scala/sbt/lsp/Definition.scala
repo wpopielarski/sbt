@@ -77,17 +77,14 @@ object Definition {
         .foldLeft(Seq.empty[String]) { (z, e) =>
           val (from, to) = e
           val fragment = line.slice(from, to).trim
-          if ((z.isEmpty && fragment.nonEmpty || z.nonEmpty && z.head.length <= fragment.length) && isIdentifier(
-                fragment)) {
-            z match {
-              case Nil => fragment +: z
-              case h +: _ if h.length < fragment.length =>
-                Seq(fragment)
-              case h +: _ if h.length == fragment.length =>
-                fragment +: z
-              case z => z
-            }
-          } else z
+          z match {
+            case Nil if fragment.nonEmpty && isIdentifier(fragment) => fragment +: z
+            case h +: _ if h.length < fragment.length && isIdentifier(fragment) =>
+              Seq(fragment)
+            case h +: _ if h.length == fragment.length && isIdentifier(fragment) =>
+              fragment +: z
+            case z => z
+          }
         }
         .headOption
     }
@@ -281,7 +278,8 @@ object Definition {
           }
           .recover {
             case anyException @ _ =>
-              log.warn(s"Problem with processing analyses ${CompactPrinter(jsonDefinition)}")
+              log.warn(
+                s"Problem with processing analyses $anyException for ${CompactPrinter(jsonDefinition)}")
               import sbt.internal.protocol.JsonRpcResponseError
               import sbt.internal.protocol.codec.JsonRPCProtocol._
               send(commandSource, requestId)(
