@@ -111,8 +111,11 @@ object Definition {
     }
 
     private[lsp] def classTraitObjectInLine(sym: String)(line: String): Seq[(String, Int)] = {
+      import scala.util.matching.Regex.quote
       val potentials =
-        Seq(s"object +$sym".r, s"trait +$sym *\\[?".r, s"class +$sym *\\[?".r)
+        Seq(s"object +${quote(sym)}".r,
+            s"trait +${quote(sym)} *\\[?".r,
+            s"class +${quote(sym)} *\\[?".r)
       potentials
         .flatMap { reg =>
           fold(Seq.empty)(reg.findAllIn(line))
