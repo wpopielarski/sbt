@@ -95,11 +95,16 @@ object Definition {
     private def asClassObjectIdentifier(sym: String) =
       Seq(s".$sym", s".$sym$$", s"$$$sym", s"$$$sym$$")
     def potentialClsOrTraitOrObj(sym: String): PartialFunction[String, String] = {
-      case potentialClassOrTraitOrObject
-          if asClassObjectIdentifier(sym).exists(potentialClassOrTraitOrObject.endsWith) ||
-            sym == potentialClassOrTraitOrObject ||
-            s"$sym$$" == potentialClassOrTraitOrObject =>
-        potentialClassOrTraitOrObject
+      import scala.reflect.NameTransformer
+      val encodedSym = NameTransformer.encode(sym)
+      val action: PartialFunction[String, String] = {
+        case potentialClassOrTraitOrObject
+            if asClassObjectIdentifier(encodedSym).exists(potentialClassOrTraitOrObject.endsWith) ||
+              encodedSym == potentialClassOrTraitOrObject ||
+              s"$encodedSym$$" == potentialClassOrTraitOrObject =>
+          potentialClassOrTraitOrObject
+      }
+      action
     }
 
     @tailrec
@@ -179,8 +184,7 @@ object Definition {
           set.asInstanceOf[Set[((String, Boolean), Option[Analysis])]].filterNot {
             case ((file, _), _) => file == cacheFile
           } + (cacheFile -> useBinary -> None),
-          Option(Inf)
-        )
+          Option(Inf))
       case _ => mode.M.pure(())
     }
   }
