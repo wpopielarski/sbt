@@ -125,4 +125,6 @@ object Dependencies {
   val log4jDependencies = Vector(log4jApi, log4jCore, log4jSlf4jImpl)
 
   val scalaCacheCaffeine = "com.github.cb372" %% "scalacache-caffeine" % "0.20.0"
+  val scalaMeta = "org.scalameta" %% "scalameta" % "2.0.0-RC1"
+  val lspDefinitionDependencies = Seq(scalaCacheCaffeine, scalaMeta)
 }

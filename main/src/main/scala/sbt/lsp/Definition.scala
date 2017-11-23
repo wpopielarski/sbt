@@ -17,6 +17,7 @@ import scala.concurrent.duration.Duration.Inf
 import scala.util.matching.Regex.MatchIterator
 import java.nio.file.{ Files, Paths }
 import sbt.StandardMain
+import sbt.librarymanagement.ModuleID
 
 object Definition {
   import java.net.URI
@@ -24,6 +25,9 @@ object Definition {
   import sbt.internal.inc.Analysis
   import sbt.internal.inc.JavaInterfaceUtil._
   val AnalysesKey = "lsp.definition.analyses.key"
+  val ClasspathSourceKey = "lsp.definition.classpath.source.key"
+  lazy val SemanticDbScalac = ModuleID("org.scalameta", "semanticdb-scalac", "2.0.0-RC1")
+    .withConfigurations(Some("plugin->default(compile)"))
 
   import sjsonnew.JsonFormat
   def send[A: JsonFormat](source: CommandSource, execId: String)(params: A): Unit = {
@@ -189,6 +193,39 @@ object Definition {
     }
   }
 
+  private[sbt] def updateCacheClasspathSource[F[_]](
+      cache: Cache[Any])(classpath: String, source: String)(implicit
+                                                            mode: Mode[F],
+                                                            flags: Flags): F[Any] = {
+    mode.M.flatMap(cache.get(ClasspathSourceKey)) {
+      case None =>
+        cache.put(ClasspathSourceKey)(Set(classpath -> source), Option(Inf))
+      case Some(set) =>
+        cache.put(ClasspathSourceKey)(
+          set.asInstanceOf[Set[(String, String)]] + (classpath -> source),
+          Option(Inf))
+      case _ => mode.M.pure(())
+    }
+  }
+
+  lazy val lspCollectClasspathsAndSources =
+    Def.taskKey[Unit]("language server protocol task to collect projects classpaths and sources")
+  def lspCollectClasspathsAndSourcesTask = Def.task {
+    val classpath = classDirectory.value.getAbsolutePath
+    val source = baseDirectory.value.getAbsolutePath
+    val s = state.value
+    s.log.warn(s"found $classpath and $source")
+    import scalacache.modes.sync._
+    updateCacheClasspathSource(StandardMain.cache)(classpath, source)
+  }
+  lazy val lspAddSemanticsToCompilerSettings =
+    Def.taskKey[Unit]("language server protocol task to add semantics compiler plugin")
+  def lspAddSemanticsToCompilerSettingsTask = Def.task {
+    libraryDependencies += SemanticDbScalac
+    scalacOptions += "-Yrangepos"
+    val s = state.value
+    s.log.warn("scalac enriched with semantic db")
+  }
   lazy val lspCollectAnalyses =
     Def.taskKey[Unit]("language server protocol task to collect analyses locations")
   def lspCollectAnalysesTask = Def.task {

@@ -54,8 +54,8 @@ import sbt.librarymanagement.Configurations.{
   IntegrationTest,
   names,
   Provided,
-  Runtime,
-  Test
+  Runtime //,
+  //Test
 }
 import sbt.librarymanagement.CrossVersion.{ binarySbtVersion, binaryScalaVersion, partialVersion }
 import sbt.librarymanagement._
@@ -497,6 +497,8 @@ object Defaults extends BuildCommon {
     compileIncSetup := compileIncSetupTask.value,
     console := consoleTask.value,
     lspCollectAnalyses := lspCollectAnalysesTask.value,
+    lspCollectClasspathsAndSources := lspCollectClasspathsAndSourcesTask.value,
+    lspAddSemanticsToCompilerSettings := lspAddSemanticsToCompilerSettingsTask.value,
     consoleQuick := consoleQuickTask.value,
     discoveredMainClasses := (compile map discoverMainClasses storeAs discoveredMainClasses xtriggeredBy compile).value,
     discoveredSbtPlugins := discoverSbtPluginNames.value,
@@ -2025,7 +2027,7 @@ object Classpaths {
       val docTypes = docArtifactTypes.value
       val out = is.withIvy(s.log)(_.getSettings.getDefaultIvyUserDir)
       val uwConfig = (unresolvedWarningConfiguration in update).value
-      val scalaModule = scalaModuleInfo.value
+      //val scalaModule = scalaModuleInfo.value
       withExcludes(out, mod.classifiers, lock(app)) { excludes =>
         lm.updateClassifiers(
           GetClassifiersConfiguration(
@@ -2056,7 +2058,7 @@ object Classpaths {
     // Override the default to handle mixing in the sbtPlugin + scala dependencies.
     allDependencies := {
       val base = projectDependencies.value ++ libraryDependencies.value
-      val dependency = sbtDependency.value
+      //val dependency = sbtDependency.value
       val isPlugin = sbtPlugin.value
       val sbtdeps =
         (sbtDependency in pluginCrossBuild).value.withConfigurations(Some(Provided.name))
@@ -2175,9 +2177,9 @@ object Classpaths {
             val log = s.log
             val out = is.withIvy(log)(_.getSettings.getDefaultIvyUserDir)
             val uwConfig = (unresolvedWarningConfiguration in update).value
-            val depDir = dependencyCacheDirectory.value
-            val ivy = scalaModuleInfo.value
-            val st = state.value
+            //val depDir = dependencyCacheDirectory.value
+            //val ivy = scalaModuleInfo.value
+            //val st = state.value
             withExcludes(out, mod.classifiers, lock(app)) {
               excludes =>
                 // val noExplicitCheck = ivy.map(_.withCheckExplicit(false))
